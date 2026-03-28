@@ -13,35 +13,69 @@
 void setup() {
   pinMode(IN1, OUTPUT); pinMode(IN2, OUTPUT); pinMode(ENA, OUTPUT);
   pinMode(IN3, OUTPUT); pinMode(IN4, OUTPUT); pinMode(ENB, OUTPUT);
-  //pinMode(IN5, OUTPUT); pinMode(IN6, OUTPUT); pinMode(ENC, OUTPUT);
-  //pinMode(IN7, OUTPUT); pinMode(IN8, OUTPUT); pinMode(END, OUTPUT);
 }
 
-// Move a motor: speed 0-255, dir true=forward false=backward
-void motorMove(int in_a, int in_b, int en, int speed, bool forward) {
-  digitalWrite(in_a, forward ? HIGH : LOW);
-  digitalWrite(in_b, forward ? LOW : HIGH);
-  analogWrite(en, speed);
+// ---- Movement functions ----
+
+void forward() {
+  digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);  // Left forward
+  digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);  // Right forward
+  analogWrite(ENA, SPEED);
+  analogWrite(ENB, SPEED);
 }
 
-void motorStop(int in_a, int in_b, int en) {
-  digitalWrite(in_a, LOW);
-  digitalWrite(in_b, LOW);
-  analogWrite(en, 0);
+void backward() {
+  digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH);  // Left backward
+  digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH);  // Right backward
+  analogWrite(ENA, SPEED);
+  analogWrite(ENB, SPEED);
+}
+
+void turnLeft() {
+  // Left wheel slower, right wheel faster
+  digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
+  digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
+  analogWrite(ENA, SPEED / 2);  // Left at half speed
+  analogWrite(ENB, SPEED);      // Right at full speed
+}
+
+void turnRight() {
+  // Right wheel slower, left wheel faster
+  digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
+  digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
+  analogWrite(ENA, SPEED);      // Left at full speed
+  analogWrite(ENB, SPEED / 2);  // Right at half speed
+}
+
+void sharpLeft() {
+  // Left wheel backward, right wheel forward
+  digitalWrite(IN1, LOW);  digitalWrite(IN2, HIGH);
+  digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
+  analogWrite(ENA, SPEED);
+  analogWrite(ENB, SPEED);
+}
+
+void sharpRight() {
+  // Left wheel forward, right wheel backward
+  digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW);  digitalWrite(IN4, HIGH);
+  analogWrite(ENA, SPEED);
+  analogWrite(ENB, SPEED);
+}
+
+void stopMotors() {
+  digitalWrite(IN1, LOW); digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW); digitalWrite(IN4, LOW);
+  analogWrite(ENA, 0);
+  analogWrite(ENB, 0);
 }
 
 void loop() {
-  // All 4 motors forward at half speed
-  //motorMove(IN1, IN2, ENA, 128, true);  // Motor A
-  motorMove(IN3, IN4, ENB, 128, true);  // Motor B
-  //motorMove(IN5, IN6, ENC, 128, true);  // Motor C
-  //motorMove(IN7, IN8, END, 128, true);  // Motor D
-  delay(2000);
-
-  // Stop all
-  //motorStop(IN1, IN2, ENA);
-  motorStop(IN3, IN4, ENB);
-  //motorStop(IN5, IN6, ENC);
-  //motorStop(IN7, IN8, END);
-  delay(1000);
+  forward();   delay(2000);
+  turnLeft();  delay(800);
+  forward();   delay(2000);
+  turnRight(); delay(800);
+  sharpLeft(); delay(500);
+  sharpRight();delay(500);
+  stopMotors();delay(2000);
 }
