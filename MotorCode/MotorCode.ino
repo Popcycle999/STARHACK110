@@ -8,7 +8,8 @@
 #define IN4 5  // Négatif moteur 1
 #define ENB 7  // PWM
 
-#define SPEED 150  // 0-255, adjust to your motors
+#define SPEED 150 // 0-255, adjust to your motors
+#define MAX_SPEED 255  
 
 void setup() {
   pinMode(IN1, OUTPUT); pinMode(IN2, OUTPUT); pinMode(ENA, OUTPUT);
@@ -20,13 +21,23 @@ void setup() {
 void forward() {
   digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);  // Left forward
   digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);  // Right forward
+  analogWrite(ENA, MAX_SPEED);
+  analogWrite(ENB, MAX_SPEED);
+  delay(10);
+  digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);  // Left forward
+  digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);  // Right forward
   analogWrite(ENA, SPEED);
   analogWrite(ENB, SPEED);
 }
 
 void backward() {
-  digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH);  // Left backward
-  digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH);  // Right backward
+  digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH);  // Left backwards
+  digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH);  // Right backwards
+  analogWrite(ENA, MAX_SPEED);
+  analogWrite(ENB, MAX_SPEED);
+  delay(10);
+  digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH);  // Left backwards
+  digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH);  // Right backwards
   analogWrite(ENA, SPEED);
   analogWrite(ENB, SPEED);
 }
@@ -72,10 +83,7 @@ void stopMotors() {
 
 void loop() {
   forward();   delay(2000);
-  turnLeft();  delay(800);
-  forward();   delay(2000);
-  turnRight(); delay(800);
-  sharpLeft(); delay(500);
-  sharpRight();delay(500);
-  stopMotors();delay(2000);
+  stopMotors(); delay(500);
+  backward(); delay(2000);
+  stopMotors(); delay(500);
 }
