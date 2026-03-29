@@ -1,141 +1,48 @@
-#include <Servo.h>
 #include <IRremote.h>
+#include <SPI.h>
+#include <MFRC522.h>
+#include <NewTone.h>
 
-// ---- Ultrasonic ----
-#define TRIG 9
-#define ECHO 10
-
-// ---- Servo ----
-#define SERVO_PIN 8
-
-// ---- Buzzer & IR ----
+// ---- Pins ----
+#define IR_PIN 2
 #define BUZZER_PIN 3
-#define IR_PIN A0
+#define RFID_SS_PIN 4
+#define RFID_RST_PIN 5
+#define TRIG 9
+#define ECHO 8
+#define LINE_SENSOR A0
 
 // ---- Tuning ----
-#define SERVO_STEP_MS     30    // ms per degree
-#define SERVO_SETTLE_MS   30    // ms to wait still before reading distance
-#define OBSTACLE_DIST_CM  25
-#define CLEAR_DIST_CM     100
-#define TURN_MS           400
-#define BUZZ_SETTLE_MS    20
+#define OBSTACLE_DIST_CM 25
+#define CLEAR_DIST_CM 100
+#define BUZZ_SETTLE_MS 20
+#define LINE_STABLE_MS 350
 
 // ---- State ----
-bool paused      = false;
-bool radarMode   = false;
-int  volumeLevel = 50;
+bool paused = false;
+int volumeLevel = 50;
+
 const int volumeMax = 100;
 const int volumeMin = 1;
-const int freqMin   = 200;
-const int freqMax   = 2000;
+const int freqMin = 200;
+const int freqMax = 2000;
 
-// ---- Servo state ----
-int           servoCurrent   = 90;
-int           servoTarget    = 90;
-unsigned long servoLastStep  = 0;
-unsigned long servoStillSince = 0;  // when servo last stopped moving
-bool          servoWasMoving  = false;
-
-// ---- Radar sweep state machine ----
-// States: 0=moving, 1=settling, 2=measure+advance
-int           sweepState     = 0;
-int           sweepDirection = 1;
-
-// ---- Turn state ----
-bool          turning    = false;
-unsigned long turnStart  = 0;
-int           turnDir    = 0;
-
-// ---- Buzzer state ----
+// ---- Buzzer / line state ----
 unsigned long buzzLast = 0;
 
-Servo radarServo;
+// état confirmé du capteur
+int stableLineValue = -1;
+
+// état en cours d'observation
+int candidateLineValue = -1;
+unsigned long candidateStartTime = 0;
+
+// ---- IR ----
 IRrecv irrecv(IR_PIN);
 decode_results results;
 
-// ========== SERVO ==========
-
-void servoUpdate() {
-  bool wasMoving = servoIsMoving();
-  if (servoCurrent == servoTarget) {
-    if (wasMoving != servoWasMoving) {
-      // Just stopped — record the time
-      servoStillSince = millis();
-    }
-    servoWasMoving = false;
-    return;
-  }
-  servoWasMoving = true;
-  if (millis() - servoLastStep >= SERVO_STEP_MS) {
-    servoCurrent += (servoTarget > servoCurrent) ? 1 : -1;
-    radarServo.write(servoCurrent);
-    servoLastStep = millis();
-  }
-}
-
-bool servoIsMoving() {
-  return servoCurrent != servoTarget;
-}
-
-bool servoSettled() {
-  // True when servo has been still for at least SERVO_SETTLE_MS
-  return !servoIsMoving() && (millis() - servoStillSince >= SERVO_SETTLE_MS);
-}
-
-void servoMoveTo(int target) {
-  servoTarget = constrain(target, 0, 180);
-}
-
-void servoMoveAndWait(int target) {
-  servoMoveTo(target);
-  while (!servoSettled()) servoUpdate();
-}
-
-// ========== MOTOR FUNCTIONS ==========
-
-void forward() {
-  digitalWrite(A1, LOW);  // IN2
-  digitalWrite(3,  HIGH); // IN1 — note: pin 3 is also BUZZER, only use when not buzzing
-  // *** If motors are wired per your latest pinout, update these ***
-}
-
-// Since you removed motor pins from this file, add them back here:
-#define IN1 A2
-#define IN2 A1
-#define ENA 6
-#define IN3 A3
-#define IN4 A4
-#define ENB 7
-
-void motorForward() {
-  digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
-  digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
-  analogWrite(ENA, 255); analogWrite(ENB, 255);
-}
-
-void motorBackward() {
-  digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH);
-  digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH);
-  analogWrite(ENA, 255); analogWrite(ENB, 255);
-}
-
-void motorTurnLeft() {
-  digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
-  digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
-  analogWrite(ENA, 255 / 2); analogWrite(ENB, 255);
-}
-
-void motorTurnRight() {
-  digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
-  digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
-  analogWrite(ENA, 255); analogWrite(ENB, 255 / 2);
-}
-
-void stopMotors() {
-  digitalWrite(IN1, LOW); digitalWrite(IN2, LOW);
-  digitalWrite(IN3, LOW); digitalWrite(IN4, LOW);
-  analogWrite(ENA, 0); analogWrite(ENB, 0);
-}
+// ---- RFID ----
+MFRC522 mfrc522(RFID_SS_PIN, RFID_RST_PIN);
 
 // ========== ULTRASONIC ==========
 
@@ -145,8 +52,10 @@ float getDistance() {
   digitalWrite(TRIG, HIGH);
   delayMicroseconds(10);
   digitalWrite(TRIG, LOW);
-  long duration = pulseIn(ECHO, HIGH, 30000);
+
+  long duration = pulseIn(ECHO, HIGH, 12000);
   if (duration == 0) return 999.0;
+
   return duration * 0.0343 / 2.0;
 }
 
@@ -154,168 +63,211 @@ float getDistance() {
 
 void buzzTick(int frequency, int duration) {
   if (millis() - buzzLast < BUZZ_SETTLE_MS) return;
-  tone(BUZZER_PIN, frequency, duration);
+  NewTone(BUZZER_PIN, frequency, duration);
   buzzLast = millis();
 }
 
-void barkBlocking() {
-  int mappedFreq = map(volumeLevel, volumeMin, volumeMax, freqMin, freqMax);
-  for (int j = 0; j < 3; j++) {
-    tone(BUZZER_PIN, mappedFreq, 80);
-    unsigned long t = millis(); while (millis() - t < 180) servoUpdate();
-    tone(BUZZER_PIN, mappedFreq / 1.5, 80);
-    unsigned long t2 = millis(); while (millis() - t2 < 200) servoUpdate();
-  }
-  unsigned long t3 = millis(); while (millis() - t3 < 300) servoUpdate();
+void stopBuzzer() {
+  noNewTone(BUZZER_PIN);
 }
 
-// ========== RADAR SWEEP STATE MACHINE ==========
-// State 0: servo is moving → wait
-// State 1: servo just settled → take reading, then move to next angle
-
-void doRadarSweepTick() {
-  servoUpdate();
-
-  switch (sweepState) {
-
-    case 0: // waiting for servo to settle
-      if (servoSettled()) {
-        sweepState = 1;
-      }
-      break;
-
-    case 1: // servo settled — read distance then advance
-      float dist = getDistance();
-      Serial.print(servoCurrent);
-      Serial.print(",");
-      Serial.print(dist);
-      Serial.println(".");
-
-      // Advance angle
-      if (servoCurrent >= 165) sweepDirection = -1;
-      if (servoCurrent <= 15)  sweepDirection = 1;
-
-      servoMoveTo(servoCurrent + sweepDirection);
-      sweepState = 0;  // back to waiting
-      break;
-  }
+void startContinuousBuzz(int frequency) {
+  NewTone(BUZZER_PIN, frequency);
 }
 
-// ========== OBSTACLE AVOIDANCE ==========
+void rfidBeep() {
+  int freq1 = 800;
+  int freq2 = 1200;
+  int freq3 = 1600;
 
-int getBestDirection() {
-  servoMoveAndWait(0);
-  float distLeft = getDistance();
-  Serial.print("Left: "); Serial.print(distLeft); Serial.println(" cm");
+  NewTone(BUZZER_PIN, freq1, 120);
+  delay(150);
 
-  servoMoveAndWait(180);
-  float distRight = getDistance();
-  Serial.print("Right: "); Serial.print(distRight); Serial.println(" cm");
+  noNewTone(BUZZER_PIN);
+  delay(100);
 
-  servoMoveAndWait(90);
-  return (distLeft > distRight) ? -1 : 1;
+  NewTone(BUZZER_PIN, freq2, 120);
+  delay(150);
+
+  noNewTone(BUZZER_PIN);
+  delay(60);
+
+  NewTone(BUZZER_PIN, freq3, 120);
+  delay(150);
+
+  noNewTone(BUZZER_PIN);
+}
+
+void lineTransitionBeep() {
+  int freq1 = 2100;
+  int freq2 = 2500;
+
+  NewTone(BUZZER_PIN, freq1, 70);
+  delay(90);
+
+  noNewTone(BUZZER_PIN);
+  delay(60);
+
+  NewTone(BUZZER_PIN, freq2, 70);
+  delay(90);
+
+  noNewTone(BUZZER_PIN);
+  delay(60);
+
+  NewTone(BUZZER_PIN, freq1, 70);
+  delay(90);
+
+  noNewTone(BUZZER_PIN);
+  delay(60);
+
+  NewTone(BUZZER_PIN, freq2, 70);
+  delay(90);
+
+  noNewTone(BUZZER_PIN);
+}
+
+// ========== RFID ==========
+
+bool checkRFIDCard() {
+  if (!mfrc522.PICC_IsNewCardPresent()) {
+    return false;
+  }
+
+  if (!mfrc522.PICC_ReadCardSerial()) {
+    return false;
+  }
+
+  mfrc522.PICC_HaltA();
+  mfrc522.PCD_StopCrypto1();
+
+  return true;
+}
+
+// ========== LINE SENSOR FILTER ==========
+
+void updateLineState(int currentLineValue) {
+  // initialisation
+  if (stableLineValue == -1) {
+    stableLineValue = currentLineValue;
+    candidateLineValue = currentLineValue;
+    candidateStartTime = millis();
+    return;
+  }
+
+  // si on lit encore l'état déjà confirmé
+  if (currentLineValue == stableLineValue) {
+    candidateLineValue = currentLineValue;
+    candidateStartTime = millis();
+    return;
+  }
+
+  // si la lecture a changé, mais que c'est une nouvelle candidate
+  if (currentLineValue != candidateLineValue) {
+    candidateLineValue = currentLineValue;
+    candidateStartTime = millis();
+    return;
+  }
+
+  // si la candidate est restée stable assez longtemps, on valide le changement
+  if (millis() - candidateStartTime >= LINE_STABLE_MS) {
+    stableLineValue = candidateLineValue;
+    lineTransitionBeep();
+    candidateStartTime = millis();
+  }
 }
 
 // ========== SETUP ==========
 
 void setup() {
-  pinMode(IN1, OUTPUT); pinMode(IN2, OUTPUT); pinMode(ENA, OUTPUT);
-  pinMode(IN3, OUTPUT); pinMode(IN4, OUTPUT); pinMode(ENB, OUTPUT);
   pinMode(TRIG, OUTPUT);
   pinMode(ECHO, INPUT);
   pinMode(BUZZER_PIN, OUTPUT);
-
-  radarServo.attach(SERVO_PIN);
-  servoMoveAndWait(90);
+  pinMode(LINE_SENSOR, INPUT);
 
   Serial.begin(9600);
+
   irrecv.enableIRIn();
-  stopMotors();
-  Serial.println("Ready. Button 1 = toggle radar mode.");
+
+  SPI.begin();
+  mfrc522.PCD_Init();
+
+  stopBuzzer();
+
+  int initialLineValue = digitalRead(LINE_SENSOR);
+  stableLineValue = initialLineValue;
+  candidateLineValue = initialLineValue;
+  candidateStartTime = millis();
 }
 
 // ========== MAIN LOOP ==========
 
 void loop() {
-  servoUpdate();
-
   // ---- IR remote ----
   if (irrecv.decode(&results)) {
     unsigned long code = results.value;
 
-    if (code == 0xFFA25D) {
+    Serial.print("IR code: 0x");
+    Serial.println(code, HEX);
+
+    if (code == 0xFFA25D) {  // toggle pause
       paused = !paused;
       if (paused) {
-        stopMotors();
-        noTone(BUZZER_PIN);
-        radarMode   = false;
-        turning     = false;
-        servoTarget = servoCurrent;
+        stopBuzzer();
       }
     }
-    else if (code == 0xFF629D) {
+    else if (code == 0xFF629D) {  // volume +
       volumeLevel = min(volumeLevel + 2, volumeMax);
     }
-    else if (code == 0xFFA857) {
+    else if (code == 0xFFA857) {  // volume -
       volumeLevel = max(volumeLevel - 2, volumeMin);
     }
-    else if (code == 0xFF30CF) {
-      radarMode = !radarMode;
-      if (radarMode) {
-        Serial.println("Radar ON");
-        sweepDirection = 1;
-        sweepState     = 0;
-        servoMoveTo(15);   // start position
-        stopMotors();
-      } else {
-        Serial.println("Radar OFF");
-        servoMoveAndWait(90);
-      }
-    }
+
     irrecv.resume();
   }
 
-  if (paused) return;
-
-  // ---- Radar mode ----
-  if (radarMode) {
-    doRadarSweepTick();
+  if (paused) {
+    stopBuzzer();
     return;
   }
 
-  // ---- Handle active turn ----
-  if (turning) {
-    if (millis() - turnStart >= TURN_MS) {
-      turning = false;
-      stopMotors();
-    }
-    return;
+  // ---- RFID ----
+  if (checkRFIDCard()) {
+    rfidBeep();
   }
 
-  // ---- Normal driving ----
-  servoMoveTo(90);
+  // ---- Read sensors ----
   float distance = getDistance();
-  Serial.print("Distance: "); Serial.print(distance); Serial.println(" cm");
+  int lineValue = digitalRead(LINE_SENSOR);
 
-  if (distance == 0 || distance > CLEAR_DIST_CM) {
-    motorForward();
+  // ---- Filtered line transition detection ----
+  updateLineState(lineValue);
+
+  // ---- Obstacle logic ----
+  if (distance < OBSTACLE_DIST_CM) {
+    int alertFreq = map(volumeLevel, volumeMin, volumeMax, freqMin, freqMax);
+    startContinuousBuzz(alertFreq);
   }
-  else if (distance < OBSTACLE_DIST_CM) {
-    Serial.println("Obstacle!");
-    stopMotors();
-    barkBlocking();
-    int dir = getBestDirection();
-    if (dir == -1) { Serial.println("Turning left");  motorTurnLeft(); }
-    else           { Serial.println("Turning right"); motorTurnRight(); }
-    turning   = true;
-    turnStart = millis();
-    turnDir   = dir;
+  else if (distance > CLEAR_DIST_CM || distance == 0) {
+    stopBuzzer();
   }
   else {
-    motorForward();
-    int freq = map(distance, CLEAR_DIST_CM, OBSTACLE_DIST_CM, 400,
-                   map(volumeLevel, volumeMin, volumeMax, freqMin, freqMax));
-    int dur  = map(distance, CLEAR_DIST_CM, OBSTACLE_DIST_CM, 350, 100);
+    int freq = map(
+      distance,
+      CLEAR_DIST_CM,
+      OBSTACLE_DIST_CM,
+      400,
+      map(volumeLevel, volumeMin, volumeMax, freqMin, freqMax)
+    );
+
+    int dur = map(distance, CLEAR_DIST_CM, OBSTACLE_DIST_CM, 350, 100);
     buzzTick(freq, dur);
   }
+
+  // ---- Debug ----
+  Serial.print("Line raw: ");
+  Serial.print(lineValue);
+  Serial.print(" | Line stable: ");
+  Serial.println(stableLineValue);
+
+  delay(50);
 }
